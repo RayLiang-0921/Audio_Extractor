@@ -15,9 +15,80 @@ import os
 import gc
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, List
 from pydub import AudioSegment
 from pydub.generators import Sine, Pulse
+import librosa
+import soundfile as sf
+import numpy as np
+
+def optimize_bpm_target(source_bpm: float, target_bpm: float) -> float:
+    """
+    Finds the optimal 'effective' target BPM by checking octave (x2, x0.5) relationships.
+    Returns the adjusted target BPM that is closest to source_bpm to minimize stretching artifacts.
+    
+    Example:
+        Source=170, Target=90 -> Returns 180 (90*2)
+        Source=75, Target=140 -> Returns 150 (75*2 is wrong ex. Target is fixed. Source is flexible? 
+        Wait. We are matching Source TO Target.
+        If Target is 90. Source is 170.
+        We can play Source at 180 (Speed up +6%). 180 is 2x Target.
+        If we play at 90, we slow down -47%.
+        So we want to find a Target Multiplier (Target * 2^n) that is closest to Source.
+    """
+    if target_bpm <= 0 or source_bpm <= 0:
+        return target_bpm
+
+    # Check multipliers: 0.5, 1.0, 2.0 (Handle Half-time and Double-time)
+    multipliers = [0.5, 1.0, 2.0]
+    best_target = target_bpm
+    min_diff_ratio = float('inf') 
+
+    for m in multipliers:
+        candidate = target_bpm * m
+        # Calculate stretch ratio (candidate / source)
+        # We want this ratio to be as close to 1.0 as possible
+        ratio = candidate / source_bpm
+        diff = abs(ratio - 1.0)
+
+        if diff < min_diff_ratio:
+            min_diff_ratio = diff
+            best_target = candidate
+
+    return best_target
+
+def time_stretch_audio(file_path: str, target_bpm: float, source_bpm: float) -> str:
+    """
+    Stretches audio to match target BPM without changing pitch.
+    Automatically handles octave processing (Smart Sync).
+    """
+    if target_bpm <= 0 or source_bpm <= 0:
+        return file_path
+        
+    # Smart Sync: Find best effective target
+    effective_target_bpm = optimize_bpm_target(source_bpm, target_bpm)
+        
+    rate = effective_target_bpm / source_bpm
+    if abs(rate - 1.0) < 0.01:
+        return file_path
+        
+    # Load with Librosa
+    y, sr = librosa.load(file_path, sr=None)
+    
+    # Time Stretch
+    # rate > 1.0 means faster (shorter duration)
+    y_stretched = librosa.effects.time_stretch(y, rate=rate)
+    
+    # Save
+    temp_dir = Path(tempfile.gettempdir()) / "drum_extractor_pro"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    out_name = f"stretched_{int(effective_target_bpm)}_{os.path.basename(file_path)}"
+    out_path = temp_dir / out_name
+    
+    # Write
+    sf.write(str(out_path), y_stretched, sr)
+    
+    return str(out_path)
 
 def generate_demo_backing(duration_sec: int = 30) -> str:
     """
@@ -117,6 +188,91 @@ def create_mix(drums_path: str, backing_path: str) -> str:
     # Memory Cleanup
     del drums
     del backing
+    del mixed
+    gc.collect()
+    
+    return str(out_path)
+
+def create_multitrack_mix(stems_paths: Dict[str, str], current_playing_stems: List[str], sample_path: Optional[str] = None) -> Optional[str]:
+    """
+    Mixes selected stems and an optional custom sample into a single audio file.
+    
+    Args:
+        stems_paths: Dictionary mapping component names (drums, bass, etc) to file paths
+        current_playing_stems: List of component names to include in the mix
+        sample_path: Optional path to a drum library sample to layer
+        
+    Returns:
+        Path to the mixed audio file or None if no inputs
+    """
+    
+    if not current_playing_stems and not sample_path:
+        return None
+        
+    mixed: Optional[AudioSegment] = None
+    files_loaded = []
+    
+    # 1. Load and Mix Stems
+    for name in current_playing_stems:
+        path = stems_paths.get(name)
+        if path and os.path.exists(path):
+            seg = AudioSegment.from_file(path)
+            files_loaded.append(seg)
+            if mixed is None:
+                mixed = seg
+            else:
+                mixed = mixed.overlay(seg)
+                
+    # If no stems were valid/selected, start with silent base if sample exists, or return None
+    if mixed is None and sample_path:
+        # We need a duration. If only sample is selected, how long? 
+        # Let's say we don't support sample-only without reference, OR we just play sample once/loop 4 bars?
+        # Better: If mix exists, we overlay sample on it. 
+        # If mix doesn't exist (only sample selected), we just return sample (looped? or raw?).
+        # Let's assume user always selects at least one stem usually. 
+        # If NOT, we just return the sample.
+        pass
+        
+    # 2. Layer Sample (Drum Kit)
+    if sample_path and os.path.exists(sample_path):
+        sample = AudioSegment.from_file(sample_path)
+        
+        if mixed is None:
+             # Only sample selected. Return it directly (or loop it?)
+             # Let's just return it directly for now, or loop 4 times if really short.
+             if len(sample) < 10000: # Less than 10s
+                 mixed = sample * 4
+             else:
+                 mixed = sample
+        else:
+            # Overlay sample. 
+            # If sample is a loop (short), loop it to match mix duration.
+            # If sample is a one-shot, just play at start? Or is it a full backing?
+            # User said "Drum Kit Library". Usually means loops or hits. 
+            # If hits, playing once at start is weird.
+            # Assuming LOOPS for now based on "Traklib" reference (beat store).
+            
+            # Loop sample to fill mix
+            if len(sample) < len(mixed):
+                loops = int(len(mixed) / len(sample)) + 1
+                sample = sample * loops
+                sample = sample[:len(mixed)]
+            
+            mixed = mixed.overlay(sample)
+
+    if mixed is None:
+        return None
+
+    # Export
+    temp_dir = Path(tempfile.gettempdir()) / "drum_extractor_pro"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    out_path = temp_dir / "multitrack_mix.wav"
+    
+    mixed.export(str(out_path), format="wav")
+    
+    # cleanup
+    for f in files_loaded: 
+        del f
     del mixed
     gc.collect()
     

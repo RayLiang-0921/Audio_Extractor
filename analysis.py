@@ -20,7 +20,37 @@ DSP Concepts:
 import librosa
 import numpy as np
 import os
-from typing import Tuple, Optional
+import re
+from typing import Optional, Tuple
+
+def extract_bpm_from_filename(filename: str) -> Optional[float]:
+    """
+    Attempts to parse BPM from a filename (e.g., "Loop_120bpm.wav" -> 120.0).
+    Returns None if no pattern is found.
+    """
+    # Regex for "Type_120", "Name_120.wav"
+    # Matches underscore followed by digits, optionally with decimal, before optional extension
+    match = re.search(r'_(\d+(?:\.\d+)?)', filename)
+    if match:
+         # There might be multiple underscores. User said "the number at the back".
+         # re.findall might be safer to get the last one?
+         # But usually _BPM is distinct. Let's use re.findall to be safe and take the last one.
+         pass
+    
+    matches = re.findall(r'_(\d+(?:\.\d+)?)', filename)
+    if matches:
+        # Take the last number found after an underscore
+        try:
+            return float(matches[-1])
+        except ValueError:
+            pass
+
+    # Legacy fallback (explicit "bpm" tag)
+    match_legacy = re.search(r'(\d+(?:\.\d+)?)[\s_-]*(?:bpm|BPM)', filename, re.IGNORECASE)
+    if match_legacy:
+        return float(match_legacy.group(1))
+
+    return None
 
 def analyze_track(file_path: str, duration: int = 60) -> Tuple[float, str]:
     """

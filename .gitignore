@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.env
+.DS_Store
+temp_inputs/
+processed_tracks/
+test_output/
+node_modules/
+.expo/
+dist/
+build/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+ffmpeg.exe
