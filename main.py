@@ -38,6 +38,7 @@ PROGRESS_STORE = {}
 # Serve the output directory at /files results in:
 # http://host:port/files/track_name/stem.wav
 app.mount("/files", StaticFiles(directory=OUTPUT_DIR), name="files")
+app.mount("/frontend", StaticFiles(directory="frontend", html=True), name="frontend")
 
 @app.get("/progress/{task_id}")
 async def get_progress(task_id: str):

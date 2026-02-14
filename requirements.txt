@@ -4,13 +4,10 @@ torchaudio
 pydub
 librosa
 soundfile
-torchaudio
-streamlit
 demucs
 fastapi
 uvicorn
 python-multipart
-librosa
-pydub
 numpy
-soundfile
+pyinstaller
+pywebview
